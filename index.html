@@ -1,0 +1,1814 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>SLU Faculty Repository</title>
+
+<!-- Tailwind CSS CDN -->
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        colors: {
+          brand: { 50:'#fef2ee',100:'#fde0d4',200:'#fab99e',300:'#f78b68',400:'#f26040',500:'#c8421a',600:'#a83515',700:'#8b2a10',800:'#70220d',900:'#5c1d0b' },
+          dark:  { 800:'#1a2332',900:'#0f1923',950:'#080f18' }
+        },
+        fontFamily: { sans:['Inter','system-ui','sans-serif'], mono:['JetBrains Mono','monospace'] }
+      }
+    }
+  }
+</script>
+
+<!-- Inter font -->
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+
+<!-- React 18 (pinned) -->
+<script crossorigin src="https://unpkg.com/react@18.2.0/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18.2.0/umd/react-dom.production.min.js"></script>
+
+<!-- Babel standalone (pinned, no source-map fetch) -->
+<script src="https://unpkg.com/@babel/standalone@7.23.10/babel.min.js"></script>
+
+<!-- Lucide Icons (pinned) -->
+<script src="https://unpkg.com/lucide@0.363.0/dist/umd/lucide.js"></script>
+
+<style>
+  *{box-sizing:border-box;margin:0;padding:0;}
+  body{font-family:'Inter',system-ui,sans-serif;-webkit-font-smoothing:antialiased;}
+  ::-webkit-scrollbar{width:5px;height:5px;}
+  ::-webkit-scrollbar-track{background:#f1f5f9;}
+  ::-webkit-scrollbar-thumb{background:#cbd5e1;border-radius:99px;}
+  ::-webkit-scrollbar-thumb:hover{background:#94a3b8;}
+
+  @keyframes slideUp  {from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:none}}
+  @keyframes fadeIn   {from{opacity:0}to{opacity:1}}
+  @keyframes spin     {to{transform:rotate(360deg)}}
+  @keyframes shimmer  {0%{background-position:-600px 0}100%{background-position:600px 0}}
+  @keyframes slideIn  {from{opacity:0;transform:translateX(20px)}to{opacity:1;transform:none}}
+
+  .anim-up   {animation:slideUp  .3s ease both}
+  .anim-fade {animation:fadeIn   .25s ease both}
+  .anim-in   {animation:slideIn  .3s ease both}
+  .spin-anim {animation:spin 1s linear infinite}
+
+  .skeleton{
+    background:linear-gradient(90deg,#f1f5f9 25%,#e2e8f0 50%,#f1f5f9 75%);
+    background-size:1200px 100%;
+    animation:shimmer 1.5s infinite;
+    border-radius:8px;
+  }
+
+  /* Drag-drop zone */
+  .dropzone{border:2px dashed #cbd5e1;border-radius:12px;padding:40px;text-align:center;transition:all .2s;cursor:pointer;}
+  .dropzone:hover,.dropzone.dragging{border-color:#c8421a;background:#fef2ee;}
+
+  /* Lucide icon helper */
+  .lc{display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;}
+</style>
+</head>
+<body class="bg-slate-50 text-slate-800">
+<div id="root"></div>
+
+<script>
+  // Suppress Babel source-map fetch error in Codespaces
+  if (window.Babel) {
+    Babel.disableScriptTags = false;
+  }
+</script>
+<script type="text/babel" data-presets="react" data-plugins="">
+const { useState, useEffect, useRef, useCallback, createContext, useContext, useMemo } = React;
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   LUCIDE ICON WRAPPER
+═══════════════════════════════════════════════════════════════════════════ */
+function Icon({ name, size=18, className="", strokeWidth=2 }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!ref.current || !window.lucide) return;
+    ref.current.innerHTML = "";
+    const svg = lucide.createElement(lucide[name] || lucide.FileQuestion);
+    if (svg) {
+      svg.setAttribute("width", size);
+      svg.setAttribute("height", size);
+      svg.setAttribute("stroke-width", strokeWidth);
+      ref.current.appendChild(svg);
+    }
+  }, [name, size, strokeWidth]);
+  return <span ref={ref} className={`lc ${className}`}/>;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   CONFIG & CONTEXT
+═══════════════════════════════════════════════════════════════════════════ */
+const API = window.location.origin + "/api";
+const AppCtx = createContext(null);
+
+async function api(path, opts={}) {
+  const token   = localStorage.getItem("slu_token");
+  const headers = { ...(opts.headers||{}) };
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  if (!(opts.body instanceof FormData)) headers["Content-Type"] = "application/json";
+  const res  = await fetch(`${API}${path}`, { ...opts, headers });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `Error ${res.status}`);
+  return data;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   HELPERS
+═══════════════════════════════════════════════════════════════════════════ */
+const fmtDate = d => {
+  try { return new Date(d).toLocaleDateString("en-GB",{day:"numeric",month:"short",year:"numeric"}); }
+  catch { return d||""; }
+};
+const fmtSize = b => {
+  if (!b) return "—";
+  if (b<1024)    return `${b} B`;
+  if (b<1048576) return `${(b/1024).toFixed(1)} KB`;
+  return `${(b/1048576).toFixed(1)} MB`;
+};
+const extMeta = ext => {
+  const m = {
+    ".pdf":  { bg:"bg-red-50",   text:"text-red-600",   border:"border-red-200",  label:"PDF"  },
+    ".docx": { bg:"bg-blue-50",  text:"text-blue-600",  border:"border-blue-200", label:"DOCX" },
+    ".pptx": { bg:"bg-orange-50",text:"text-orange-600",border:"border-orange-200",label:"PPTX"},
+    ".txt":  { bg:"bg-gray-50",  text:"text-gray-600",  border:"border-gray-200", label:"TXT"  },
+    ".xlsx": { bg:"bg-green-50", text:"text-green-600", border:"border-green-200",label:"XLSX" },
+  };
+  return m[ext] || { bg:"bg-purple-50", text:"text-purple-600", border:"border-purple-200", label:(ext||"").replace(".","").toUpperCase()||"FILE" };
+};
+
+function FileBadge({ ext }) {
+  const m = extMeta(ext);
+  return (
+    <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold uppercase font-mono border ${m.bg} ${m.text} ${m.border}`}>
+      {m.label}
+    </span>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   SPINNER
+═══════════════════════════════════════════════════════════════════════════ */
+function Spinner({ size=18, className="text-brand-500" }) {
+  return <Icon name="Loader2" size={size} className={`spin-anim ${className}`}/>;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   TOAST
+═══════════════════════════════════════════════════════════════════════════ */
+const TOAST_META = {
+  success: { bg:"bg-emerald-50 border-emerald-200", text:"text-emerald-800", icon:"CheckCircle2" },
+  error:   { bg:"bg-red-50 border-red-200",         text:"text-red-800",     icon:"XCircle" },
+  info:    { bg:"bg-blue-50 border-blue-200",        text:"text-blue-800",   icon:"Info" },
+};
+function ToastContainer({ toasts }) {
+  return (
+    <div className="fixed bottom-6 right-6 z-[9999] flex flex-col gap-2 pointer-events-none">
+      {toasts.map(t => {
+        const m = TOAST_META[t.type] || TOAST_META.info;
+        return (
+          <div key={t.id} className={`anim-in flex items-center gap-3 px-4 py-3 rounded-xl border shadow-lg text-sm font-medium pointer-events-auto max-w-sm ${m.bg} ${m.text}`}>
+            <Icon name={m.icon} size={16}/>
+            {t.msg}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   EMPTY STATE
+═══════════════════════════════════════════════════════════════════════════ */
+function EmptyState({ icon="Inbox", title="Nothing here", desc="", action, actionLabel="Go" }) {
+  return (
+    <div className="flex flex-col items-center justify-center py-20 text-center">
+      <div className="w-16 h-16 rounded-2xl bg-slate-100 flex items-center justify-center mb-4">
+        <Icon name={icon} size={28} className="text-slate-400"/>
+      </div>
+      <div className="font-semibold text-slate-700 mb-1">{title}</div>
+      {desc && <p className="text-sm text-slate-500 mb-4 max-w-xs">{desc}</p>}
+      {action && (
+        <button onClick={action} className="btn-primary text-sm px-4 py-2 rounded-lg">
+          {actionLabel}
+        </button>
+      )}
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   SKELETON
+═══════════════════════════════════════════════════════════════════════════ */
+function SkeletonCard() {
+  return (
+    <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-3">
+      <div className="skeleton h-4 w-3/4"/>
+      <div className="skeleton h-3 w-full"/>
+      <div className="skeleton h-3 w-2/3"/>
+      <div className="flex gap-2 mt-2">
+        <div className="skeleton h-5 w-16 rounded-full"/>
+        <div className="skeleton h-5 w-20 rounded-full"/>
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   AUTH PAGE
+═══════════════════════════════════════════════════════════════════════════ */
+function AuthPage({ onLogin }) {
+  const [mode, setMode] = useState("login");
+  const [form, setForm] = useState({ name:"", email:"", password:"", department:"Computer Science" });
+  const [loading, setLoading] = useState(false);
+  const [err, setErr]   = useState("");
+
+  const upd = k => e => setForm(f=>({...f,[k]:e.target.value}));
+
+  const submit = async e => {
+    e.preventDefault(); setErr(""); setLoading(true);
+    try {
+      const ep   = mode==="login" ? "/auth/login" : "/auth/register";
+      const data = await api(ep, { method:"POST", body: JSON.stringify(form) });
+      localStorage.setItem("slu_token", data.token);
+      localStorage.setItem("slu_user",  JSON.stringify(data.user));
+      onLogin(data.user);
+    } catch(ex) { setErr(ex.message); }
+    finally { setLoading(false); }
+  };
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-dark-950 via-dark-900 to-dark-800 flex items-center justify-center p-6">
+      <div className="w-full max-w-md anim-up">
+        {/* Branding */}
+        <div className="text-center mb-8">
+          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-brand-500/20 border border-brand-500/30 mb-4">
+            <Icon name="BookOpen" size={30} className="text-brand-400"/>
+          </div>
+          <h1 className="text-2xl font-bold text-white tracking-tight">Faculty Repository</h1>
+          <p className="text-slate-400 text-sm mt-1">Dept. of Computer Science · Kafin Hausa State University</p>
+        </div>
+
+        {/* Card */}
+        <div className="bg-white/5 backdrop-blur border border-white/10 rounded-2xl p-8">
+          {/* Mode toggle */}
+          <div className="flex gap-1 bg-white/5 rounded-xl p-1 mb-6">
+            {["login","register"].map(m => (
+              <button key={m} onClick={()=>{setMode(m);setErr("");}}
+                className={`flex-1 py-2 rounded-lg text-sm font-semibold transition-all ${mode===m?"bg-brand-500 text-white":"text-slate-400 hover:text-white"}`}>
+                {m==="login" ? "Sign In" : "Register"}
+              </button>
+            ))}
+          </div>
+
+          <form onSubmit={submit} className="space-y-4">
+            {mode==="register" && (
+              <div>
+                <label className="block text-xs font-semibold text-slate-400 mb-1.5 uppercase tracking-wide">Full Name</label>
+                <input value={form.name} onChange={upd("name")} placeholder="Dr. John Doe"
+                  className="w-full bg-white/5 border border-white/10 rounded-lg px-4 py-2.5 text-white placeholder-slate-500 text-sm focus:outline-none focus:border-brand-500 transition"/>
+              </div>
+            )}
+            <div>
+              <label className="block text-xs font-semibold text-slate-400 mb-1.5 uppercase tracking-wide">Email</label>
+              <input type="email" value={form.email} onChange={upd("email")} placeholder="you@slu.edu.ng"
+                className="w-full bg-white/5 border border-white/10 rounded-lg px-4 py-2.5 text-white placeholder-slate-500 text-sm focus:outline-none focus:border-brand-500 transition"/>
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-400 mb-1.5 uppercase tracking-wide">Password</label>
+              <input type="password" value={form.password} onChange={upd("password")} placeholder="••••••••"
+                className="w-full bg-white/5 border border-white/10 rounded-lg px-4 py-2.5 text-white placeholder-slate-500 text-sm focus:outline-none focus:border-brand-500 transition"/>
+            </div>
+            {mode==="register" && (
+              <div>
+                <label className="block text-xs font-semibold text-slate-400 mb-1.5 uppercase tracking-wide">Department</label>
+                <input value={form.department} onChange={upd("department")} placeholder="Computer Science"
+                  className="w-full bg-white/5 border border-white/10 rounded-lg px-4 py-2.5 text-white placeholder-slate-500 text-sm focus:outline-none focus:border-brand-500 transition"/>
+              </div>
+            )}
+            {err && <div className="text-red-400 text-sm bg-red-500/10 border border-red-500/20 rounded-lg px-4 py-2.5 flex items-center gap-2"><Icon name="AlertCircle" size={14}/>{err}</div>}
+            <button type="submit" disabled={loading}
+              className="w-full bg-brand-500 hover:bg-brand-600 text-white font-semibold py-2.5 rounded-lg transition flex items-center justify-center gap-2 mt-2 disabled:opacity-60">
+              {loading ? <Spinner size={16} className="text-white"/> : <Icon name={mode==="login"?"LogIn":"UserPlus"} size={16}/>}
+              {mode==="login" ? "Sign In" : "Create Account"}
+            </button>
+          </form>
+        </div>
+        <p className="text-center text-slate-600 text-xs mt-4">Admin: admin@slu.edu.ng / Admin@1234</p>
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   SIDEBAR
+═══════════════════════════════════════════════════════════════════════════ */
+function Sidebar({ active, setPage, user, logout, open }) {
+  const navItems = [
+    { id:"dashboard", label:"Dashboard",    icon:"LayoutDashboard" },
+    { id:"search",    label:"Search",        icon:"Search" },
+    { id:"upload",    label:"Upload",         icon:"Upload" },
+    { id:"my-docs",   label:"My Documents",  icon:"FolderOpen" },
+    { id:"bookmarks", label:"Bookmarks",      icon:"Bookmark" },
+    { id:"faculty",   label:"Faculty",        icon:"Users" },
+    { id:"profile",   label:"Profile",        icon:"User" },
+    ...(user?.role==="admin" ? [
+      { id:"admin-stats", label:"Analytics",   icon:"BarChart3" },
+      { id:"admin-users", label:"Manage Users",icon:"Shield" },
+      { id:"admin-docs",  label:"All Documents",icon:"Database" },
+      { id:"admin-activity",label:"Activity Log",icon:"Activity" },
+    ] : [])
+  ];
+
+  return (
+    <aside className={`fixed inset-y-0 left-0 z-50 w-64 bg-dark-900 flex flex-col transition-transform duration-300 lg:translate-x-0 lg:static lg:inset-auto ${open?"translate-x-0":"-translate-x-full"}`}>
+      {/* Logo */}
+      <div className="px-5 py-5 border-b border-white/5">
+        <div className="flex items-center gap-3">
+          <div className="w-9 h-9 rounded-xl bg-brand-500 flex items-center justify-center flex-shrink-0">
+            <Icon name="BookOpen" size={18} className="text-white"/>
+          </div>
+          <div>
+            <div className="text-white font-semibold text-sm leading-tight">SLU Repository</div>
+            <div className="text-slate-500 text-xs">CS Department</div>
+          </div>
+        </div>
+      </div>
+
+      {/* Nav */}
+      <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-0.5">
+        {navItems.map(item => {
+          const isActive = active === item.id || active.startsWith(item.id+":");
+          return (
+            <button key={item.id} onClick={()=>setPage(item.id)}
+              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
+                isActive
+                  ? "bg-brand-500 text-white shadow-sm"
+                  : "text-slate-400 hover:bg-white/5 hover:text-white"
+              }`}>
+              <Icon name={item.icon} size={17}/>
+              {item.label}
+            </button>
+          );
+        })}
+      </nav>
+
+      {/* User */}
+      <div className="px-3 py-4 border-t border-white/5">
+        <div className="flex items-center gap-3 px-3 py-2 rounded-xl bg-white/5 mb-2">
+          <div className="w-8 h-8 rounded-full bg-brand-500 flex items-center justify-center flex-shrink-0">
+            <span className="text-white text-xs font-bold">{user?.name?.[0]?.toUpperCase()}</span>
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="text-white text-xs font-semibold truncate">{user?.name}</div>
+            <div className="text-slate-500 text-[10px] capitalize">{user?.role}</div>
+          </div>
+        </div>
+        <button onClick={logout}
+          className="w-full flex items-center gap-2 px-3 py-2 rounded-xl text-slate-500 hover:text-red-400 hover:bg-red-500/5 text-xs font-medium transition">
+          <Icon name="LogOut" size={14}/> Sign out
+        </button>
+      </div>
+    </aside>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   DOC CARD
+═══════════════════════════════════════════════════════════════════════════ */
+function DocCard({ doc, setPage, onDelete }) {
+  const { toast, user } = useContext(AppCtx);
+  const canEdit = user?.id===doc.uploader_id || user?.role==="admin";
+  const tags    = (doc.tags||"").split(",").filter(Boolean).slice(0,3);
+
+  const handleDownload = async e => {
+    e.stopPropagation();
+    try {
+      const token = localStorage.getItem("slu_token");
+      const res   = await fetch(`${API}/documents/${doc.id}/download`, { headers:{"Authorization":`Bearer ${token}`} });
+      if (!res.ok) throw new Error("Download failed");
+      const blob = await res.blob();
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement("a");
+      a.href=url; a.download=doc.original_name; a.click();
+      URL.revokeObjectURL(url);
+      toast("Download started","success");
+    } catch(ex) { toast(ex.message,"error"); }
+  };
+
+  const handleDelete = async e => {
+    e.stopPropagation();
+    if (!confirm(`Delete "${doc.title}"?`)) return;
+    try {
+      await api(`/documents/${doc.id}`,{method:"DELETE"});
+      toast("Document deleted","success");
+      onDelete?.(doc.id);
+    } catch(ex) { toast(ex.message,"error"); }
+  };
+
+  return (
+    <div onClick={()=>setPage(`doc:${doc.id}`)}
+      className="group bg-white rounded-xl border border-slate-200 p-5 cursor-pointer hover:border-brand-300 hover:shadow-md hover:shadow-brand-100 transition-all duration-200 flex flex-col gap-3">
+      {/* Header */}
+      <div className="flex items-start justify-between gap-2">
+        <FileBadge ext={doc.file_type}/>
+        {doc.relevance && (
+          <span className="text-[10px] font-semibold text-amber-600 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5">
+            ⭐ {Math.min(100,Math.round(doc.relevance*10))}%
+          </span>
+        )}
+      </div>
+
+      {/* Title */}
+      <div className="font-semibold text-slate-800 text-sm leading-snug line-clamp-2 group-hover:text-brand-600 transition">
+        {doc.title}
+      </div>
+
+      {/* Description */}
+      {doc.description && (
+        <p className="text-xs text-slate-500 line-clamp-2">{doc.description}</p>
+      )}
+
+      {/* Tags */}
+      <div className="flex flex-wrap gap-1.5">
+        {doc.course_code   && <span className="text-[10px] font-semibold bg-blue-50 text-blue-600 border border-blue-100 rounded-full px-2 py-0.5">{doc.course_code}</span>}
+        {doc.resource_type && <span className="text-[10px] font-semibold bg-emerald-50 text-emerald-600 border border-emerald-100 rounded-full px-2 py-0.5">{doc.resource_type}</span>}
+        {tags[0] && <span className="text-[10px] text-slate-500 bg-slate-50 border border-slate-100 rounded-full px-2 py-0.5">{tags[0]}</span>}
+      </div>
+
+      {/* Footer */}
+      <div className="flex items-center justify-between mt-auto pt-2 border-t border-slate-100">
+        <div className="text-[11px] text-slate-400">{doc.uploader_name} · {fmtDate(doc.created_at)}</div>
+        <div className="flex items-center gap-1">
+          <span className="flex items-center gap-1 text-[11px] text-slate-400"><Icon name="Eye" size={12}/>{doc.view_count||0}</span>
+          <button onClick={handleDownload}
+            className="p-1.5 rounded-lg hover:bg-brand-50 hover:text-brand-600 text-slate-400 transition" title="Download">
+            <Icon name="Download" size={13}/>
+          </button>
+          {canEdit && (
+            <button onClick={handleDelete}
+              className="p-1.5 rounded-lg hover:bg-red-50 hover:text-red-500 text-slate-400 transition" title="Delete">
+              <Icon name="Trash2" size={13}/>
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   DASHBOARD
+═══════════════════════════════════════════════════════════════════════════ */
+function Dashboard({ user, setPage }) {
+  const { toast } = useContext(AppCtx);
+  const [stats,   setStats]   = useState(null);
+  const [recent,  setRecent]  = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(()=>{
+    (async()=>{
+      try {
+        const [docs] = await Promise.all([api("/documents?page=1")]);
+        setRecent(docs.documents.slice(0,6));
+        if (user.role==="admin") { const s=await api("/admin/stats"); setStats(s); }
+      } catch(e){ toast(e.message,"error"); }
+      finally { setLoading(false); }
+    })();
+  },[]);
+
+  const statCards = stats ? [
+    { label:"Documents", value:stats.total_documents, icon:"FileText",    color:"text-brand-600",   bg:"bg-brand-50"   },
+    { label:"Users",     value:stats.total_users,     icon:"Users",        color:"text-blue-600",    bg:"bg-blue-50"    },
+    { label:"Downloads", value:stats.total_downloads, icon:"Download",     color:"text-emerald-600", bg:"bg-emerald-50" },
+    { label:"Bookmarks", value:stats.total_bookmarks, icon:"Bookmark",     color:"text-amber-600",   bg:"bg-amber-50"   },
+    { label:"Comments",  value:stats.total_comments,  icon:"MessageCircle",color:"text-purple-600",  bg:"bg-purple-50"  },
+    { label:"Searches",  value:stats.total_searches,  icon:"Search",       color:"text-cyan-600",    bg:"bg-cyan-50"    },
+  ] : [];
+
+  return (
+    <div className="anim-up space-y-8">
+      {/* Hero */}
+      <div className="rounded-2xl bg-gradient-to-r from-dark-900 via-dark-800 to-slate-800 p-8">
+        <h1 className="text-2xl font-bold text-white mb-1">
+          Welcome back, {user.name.split(" ")[0]} 👋
+        </h1>
+        <p className="text-slate-400 text-sm mb-6">
+          {new Date().toLocaleDateString("en-GB",{weekday:"long",day:"numeric",month:"long",year:"numeric"})}
+        </p>
+        <div className="flex flex-wrap gap-3">
+          <button onClick={()=>setPage("upload")}
+            className="flex items-center gap-2 bg-brand-500 hover:bg-brand-600 text-white text-sm font-semibold px-5 py-2.5 rounded-xl transition">
+            <Icon name="Upload" size={15}/> Upload Document
+          </button>
+          <button onClick={()=>setPage("search")}
+            className="flex items-center gap-2 bg-white/10 hover:bg-white/20 text-white border border-white/20 text-sm font-semibold px-5 py-2.5 rounded-xl transition">
+            <Icon name="Search" size={15}/> Search Repository
+          </button>
+        </div>
+      </div>
+
+      {/* Stats */}
+      {loading ? (
+        <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-4">
+          {[...Array(6)].map((_,i)=><div key={i} className="skeleton h-24 rounded-xl"/>)}
+        </div>
+      ) : stats ? (
+        <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 gap-4">
+          {statCards.map(s=>(
+            <div key={s.label} className="bg-white rounded-xl border border-slate-200 p-4">
+              <div className={`w-10 h-10 rounded-xl ${s.bg} flex items-center justify-center mb-3`}>
+                <Icon name={s.icon} size={20} className={s.color}/>
+              </div>
+              <div className={`text-2xl font-bold ${s.color} mb-0.5`}>{s.value?.toLocaleString()}</div>
+              <div className="text-xs text-slate-500 font-medium">{s.label}</div>
+            </div>
+          ))}
+        </div>
+      ) : null}
+
+      {/* Recent */}
+      <div>
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="font-semibold text-slate-800">Recent Documents</h2>
+          <button onClick={()=>setPage("search")} className="text-sm text-brand-500 hover:text-brand-600 font-medium flex items-center gap-1">
+            View all <Icon name="ArrowRight" size={14}/>
+          </button>
+        </div>
+        {loading ? (
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
+            {[...Array(6)].map((_,i)=><SkeletonCard key={i}/>)}
+          </div>
+        ) : recent.length>0 ? (
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
+            {recent.map(doc=><DocCard key={doc.id} doc={doc} setPage={setPage}/>)}
+          </div>
+        ) : (
+          <EmptyState icon="FolderOpen" title="No documents yet" desc="Be the first to upload a resource."
+            action={()=>setPage("upload")} actionLabel="Upload Now"/>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   SEARCH PAGE
+═══════════════════════════════════════════════════════════════════════════ */
+function SearchPage({ setPage, authorFilter }) {
+  const { toast } = useContext(AppCtx);
+  const [q,        setQ]        = useState("");
+  const [filters,  setFilters]  = useState({ course:"", year:"", type:"", level:"", author: authorFilter||"" });
+  const [results,  setResults]  = useState([]);
+  const [total,    setTotal]    = useState(0);
+  const [loading,  setLoading]  = useState(false);
+  const [searched, setSearched] = useState(false);
+  const [page,     setPageNum]  = useState(1);
+  const [popTags,  setPopTags]  = useState([]);
+
+  useEffect(()=>{ api("/tags/popular").then(d=>setPopTags(d.tags)).catch(()=>{}); },[]);
+  useEffect(()=>{ if (authorFilter) doSearch(1); },[authorFilter]);
+
+  const doSearch = async (pg=1) => {
+    setLoading(true); setSearched(true);
+    try {
+      const ps = new URLSearchParams({ q, page:pg,
+        ...(filters.course&&{course:filters.course}),
+        ...(filters.year&&{year:filters.year}),
+        ...(filters.type&&{type:filters.type}),
+        ...(filters.level&&{level:filters.level}),
+        ...(filters.author&&{author:filters.author}),
+      });
+      const data = await api(`/documents?${ps}`);
+      setResults(data.documents); setTotal(data.total); setPageNum(pg);
+    } catch(e){ toast(e.message,"error"); }
+    finally { setLoading(false); }
+  };
+
+  const courses  = ["CSC101","CSC201","CSC301","CSC302","CSC401","CSC402","CSC403","CSC404","CSC501","MAT101","STA101"];
+  const resTypes = ["Lecture Note","Research Paper","Assignment","Past Question","Textbook","Presentation","Tutorial","Project","General"];
+  const levels   = ["100 Level","200 Level","300 Level","400 Level","Postgraduate"];
+  const years    = ["2024/2025","2023/2024","2022/2023","2021/2022","2020/2021"];
+
+  const clearAll = () => { setQ(""); setFilters({course:"",year:"",type:"",level:"",author:""}); setResults([]); setSearched(false); };
+
+  return (
+    <div className="anim-up space-y-6">
+      <div>
+        <h1 className="text-xl font-bold text-slate-800">Search Repository</h1>
+        <p className="text-sm text-slate-500 mt-0.5">AI-powered semantic search across all academic materials</p>
+      </div>
+
+      {/* Search bar */}
+      <div className="flex gap-3">
+        <div className="relative flex-1">
+          <Icon name="Search" size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none"/>
+          <input value={q} onChange={e=>setQ(e.target.value)} onKeyDown={e=>e.key==="Enter"&&doSearch(1)}
+            placeholder="Search documents, topics, course codes…"
+            className="w-full pl-11 pr-4 py-3 border border-slate-200 rounded-xl text-sm focus:outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-100 bg-white transition"/>
+        </div>
+        <button onClick={()=>doSearch(1)} disabled={loading}
+          className="flex items-center gap-2 bg-brand-500 hover:bg-brand-600 text-white font-semibold px-6 py-3 rounded-xl transition disabled:opacity-60 text-sm">
+          {loading ? <Spinner size={15} className="text-white"/> : <Icon name="Search" size={15}/>}
+          Search
+        </button>
+      </div>
+
+      {/* Filters */}
+      <div className="flex flex-wrap gap-2 items-center">
+        {[
+          { key:"course", label:"Course", opts:courses },
+          { key:"type",   label:"Type",   opts:resTypes },
+          { key:"level",  label:"Level",  opts:levels },
+          { key:"year",   label:"Year",   opts:years },
+        ].map(({key,label,opts})=>(
+          <select key={key} value={filters[key]}
+            onChange={e=>setFilters(f=>({...f,[key]:e.target.value}))}
+            className="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:border-brand-400 text-slate-700">
+            <option value="">All {label}s</option>
+            {opts.map(o=><option key={o}>{o}</option>)}
+          </select>
+        ))}
+        {(q||Object.values(filters).some(Boolean)) && (
+          <button onClick={clearAll} className="flex items-center gap-1.5 text-sm text-slate-500 hover:text-slate-700 border border-slate-200 rounded-lg px-3 py-2 bg-white transition">
+            <Icon name="X" size={13}/> Clear
+          </button>
+        )}
+      </div>
+
+      {/* Popular tags */}
+      {!searched && popTags.length>0 && (
+        <div>
+          <div className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Popular Tags</div>
+          <div className="flex flex-wrap gap-2">
+            {popTags.slice(0,24).map(t=>(
+              <button key={t.tag} onClick={()=>{setQ(t.tag);setTimeout(()=>doSearch(1),0);}}
+                className="text-xs bg-white border border-slate-200 hover:border-brand-300 hover:text-brand-600 rounded-full px-3 py-1.5 transition text-slate-600">
+                {t.tag} <span className="text-slate-400">({t.cnt})</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Results */}
+      {searched && (
+        <div>
+          <div className="text-sm text-slate-500 mb-4">
+            {loading ? "Searching…" : <>{total} result{total!==1?"s":""} found {q&&<span className="text-brand-500 font-medium">for "{q}"</span>}</>}
+          </div>
+          {loading ? (
+            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
+              {[...Array(6)].map((_,i)=><SkeletonCard key={i}/>)}
+            </div>
+          ) : results.length>0 ? (
+            <>
+              <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
+                {results.map(doc=><DocCard key={doc.id} doc={doc} setPage={setPage}/>)}
+              </div>
+              {total>20 && (
+                <div className="flex items-center justify-center gap-3 mt-8">
+                  {page>1 && <button onClick={()=>doSearch(page-1)} className="text-sm border border-slate-200 px-4 py-2 rounded-lg hover:bg-slate-50 transition flex items-center gap-2"><Icon name="ChevronLeft" size={15}/>Prev</button>}
+                  <span className="text-sm text-slate-500">Page {page} of {Math.ceil(total/20)}</span>
+                  {results.length===20 && <button onClick={()=>doSearch(page+1)} className="text-sm border border-slate-200 px-4 py-2 rounded-lg hover:bg-slate-50 transition flex items-center gap-2">Next<Icon name="ChevronRight" size={15}/></button>}
+                </div>
+              )}
+            </>
+          ) : (
+            <EmptyState icon="SearchX" title="No results found" desc="Try different keywords or remove some filters."/>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   UPLOAD PAGE
+═══════════════════════════════════════════════════════════════════════════ */
+function UploadPage({ setPage }) {
+  const { toast } = useContext(AppCtx);
+  const [file,     setFile]     = useState(null);
+  const [dragging, setDragging] = useState(false);
+  const [uploading,setUploading]= useState(false);
+  const [progress, setProgress] = useState(0);
+  const [result,   setResult]   = useState(null);
+  const [form,     setForm]     = useState({
+    title:"", description:"", course_code:"", academic_level:"",
+    resource_type:"", academic_year:"", is_public:"1"
+  });
+  const fileRef = useRef();
+  const upd = k => e => setForm(f=>({...f,[k]:e.target.value}));
+
+  const courses  = ["","CSC101","CSC201","CSC301","CSC302","CSC401","CSC402","CSC403","CSC404","CSC501","MAT101","STA101"];
+  const resTypes = ["","Lecture Note","Research Paper","Assignment","Past Question","Textbook","Presentation","Tutorial","Project","General"];
+  const levels   = ["","100 Level","200 Level","300 Level","400 Level","Postgraduate"];
+
+  const onDrop = e => {
+    e.preventDefault(); setDragging(false);
+    const f = e.dataTransfer.files[0]; if (f) { setFile(f); if (!form.title) setForm(fm=>({...fm,title:f.name.replace(/\.[^.]+$/,"").replace(/[-_]/g," ")})); }
+  };
+
+  const onFileChange = e => {
+    const f = e.target.files[0]; if (!f) return;
+    setFile(f); if (!form.title) setForm(fm=>({...fm,title:f.name.replace(/\.[^.]+$/,"").replace(/[-_]/g," ")}));
+  };
+
+  const submit = async e => {
+    e.preventDefault();
+    if (!file) { toast("Please select a file","error"); return; }
+    if (!form.title.trim()) { toast("Title is required","error"); return; }
+    setUploading(true); setProgress(0); setResult(null);
+    const fd = new FormData();
+    fd.append("file", file);
+    Object.entries(form).forEach(([k,v]) => fd.append(k, v));
+    const iv = setInterval(()=>setProgress(p=>Math.min(p+12,90)), 300);
+    try {
+      const data = await api("/documents/upload",{method:"POST",body:fd});
+      clearInterval(iv); setProgress(100); setResult(data);
+      toast("Document uploaded successfully!","success");
+    } catch(ex){ clearInterval(iv); toast(ex.message,"error"); }
+    finally { setUploading(false); }
+  };
+
+  if (result) return (
+    <div className="anim-up max-w-xl">
+      <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-8 text-center mb-6">
+        <div className="w-16 h-16 bg-emerald-100 rounded-full flex items-center justify-center mx-auto mb-4">
+          <Icon name="CheckCircle2" size={32} className="text-emerald-500"/>
+        </div>
+        <h2 className="font-bold text-lg text-emerald-800 mb-1">Uploaded Successfully!</h2>
+        <p className="text-sm text-emerald-700 mb-4">Document #{result.id} has been processed and indexed.</p>
+        <div className="bg-white rounded-xl p-4 text-left space-y-2 text-sm">
+          <div className="flex justify-between"><span className="text-slate-500">Course:</span><span className="font-medium">{result.classification.course_code||"Auto-detected"}</span></div>
+          <div className="flex justify-between"><span className="text-slate-500">Type:</span><span className="font-medium">{result.classification.resource_type}</span></div>
+          <div className="flex justify-between"><span className="text-slate-500">Level:</span><span className="font-medium">{result.classification.academic_level||"—"}</span></div>
+        </div>
+        {result.tags?.length>0 && (
+          <div className="mt-4 flex flex-wrap gap-1.5 justify-center">
+            {result.tags.slice(0,8).map(t=><span key={t} className="text-xs bg-white border border-slate-200 rounded-full px-2.5 py-1 text-slate-600">{t}</span>)}
+          </div>
+        )}
+      </div>
+      <div className="flex gap-3">
+        <button onClick={()=>setPage(`doc:${result.id}`)} className="flex-1 bg-brand-500 hover:bg-brand-600 text-white font-semibold py-3 rounded-xl transition text-sm">View Document</button>
+        <button onClick={()=>{setResult(null);setFile(null);setForm({title:"",description:"",course_code:"",academic_level:"",resource_type:"",academic_year:"",is_public:"1"});}} className="flex-1 border border-slate-200 hover:bg-slate-50 text-slate-700 font-semibold py-3 rounded-xl transition text-sm">Upload Another</button>
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="anim-up max-w-2xl">
+      <div className="mb-6">
+        <h1 className="text-xl font-bold text-slate-800">Upload Document</h1>
+        <p className="text-sm text-slate-500 mt-0.5">AI will auto-classify and tag your document</p>
+      </div>
+
+      <form onSubmit={submit} className="space-y-6">
+        {/* Drop zone */}
+        <div className={`dropzone ${dragging?"dragging":""}`}
+          onDragOver={e=>{e.preventDefault();setDragging(true);}}
+          onDragLeave={()=>setDragging(false)} onDrop={onDrop}
+          onClick={()=>fileRef.current.click()}>
+          <input ref={fileRef} type="file" className="hidden"
+            accept=".pdf,.docx,.pptx,.txt,.xlsx,.png,.jpg,.jpeg" onChange={onFileChange}/>
+          {file ? (
+            <div className="flex flex-col items-center gap-2">
+              <FileBadge ext={"."+file.name.split(".").pop().toLowerCase()}/>
+              <p className="font-semibold text-slate-700 text-sm mt-2">{file.name}</p>
+              <p className="text-xs text-slate-400">{fmtSize(file.size)}</p>
+            </div>
+          ) : (
+            <div className="flex flex-col items-center gap-2">
+              <Icon name="UploadCloud" size={40} className="text-slate-300"/>
+              <p className="font-semibold text-slate-600 text-sm mt-1">Drop file here or click to browse</p>
+              <p className="text-xs text-slate-400">PDF, DOCX, PPTX, TXT, XLSX, PNG, JPG · Max 50 MB</p>
+            </div>
+          )}
+        </div>
+
+        {/* Metadata */}
+        <div className="bg-white rounded-xl border border-slate-200 p-6 space-y-4">
+          <h3 className="font-semibold text-slate-700 text-sm">Document Details</h3>
+          <div>
+            <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1.5">Title *</label>
+            <input value={form.title} onChange={upd("title")} placeholder="Introduction to Data Structures"
+              className="w-full border border-slate-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-100 transition"/>
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1.5">Description</label>
+            <textarea value={form.description} onChange={upd("description")} rows={3}
+              placeholder="Brief summary of the document content…"
+              className="w-full border border-slate-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-100 transition resize-none"/>
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            {[
+              { key:"course_code", label:"Course Code", opts:courses, ph:"Auto-detect" },
+              { key:"resource_type", label:"Resource Type", opts:resTypes, ph:"Auto-detect" },
+              { key:"academic_level", label:"Academic Level", opts:levels, ph:"Auto-detect" },
+              { key:"academic_year", label:"Academic Year", opts:null, ph:"2024/2025" },
+            ].map(({key,label,opts,ph})=>(
+              <div key={key}>
+                <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1.5">{label}</label>
+                {opts ? (
+                  <select value={form[key]} onChange={upd(key)}
+                    className="w-full border border-slate-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:border-brand-400 bg-white text-slate-700 transition">
+                    {opts.map(o=><option key={o} value={o}>{o||ph}</option>)}
+                  </select>
+                ) : (
+                  <input value={form[key]} onChange={upd(key)} placeholder={ph}
+                    className="w-full border border-slate-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-100 transition"/>
+                )}
+              </div>
+            ))}
+          </div>
+          <div className="flex items-center gap-3">
+            <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Visibility</label>
+            <select value={form.is_public} onChange={upd("is_public")}
+              className="border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-brand-400 bg-white text-slate-700">
+              <option value="1">Public</option>
+              <option value="0">Private</option>
+            </select>
+          </div>
+        </div>
+
+        {/* Progress */}
+        {uploading && (
+          <div className="bg-white rounded-xl border border-slate-200 p-4">
+            <div className="flex justify-between text-xs text-slate-500 mb-2">
+              <span>Uploading & AI processing…</span><span>{progress}%</span>
+            </div>
+            <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
+              <div className="h-full bg-brand-500 rounded-full transition-all duration-300" style={{width:`${progress}%`}}/>
+            </div>
+          </div>
+        )}
+
+        <button type="submit" disabled={uploading}
+          className="w-full flex items-center justify-center gap-2 bg-brand-500 hover:bg-brand-600 text-white font-semibold py-3.5 rounded-xl transition disabled:opacity-60 text-sm">
+          {uploading ? <><Spinner size={16} className="text-white"/>Processing…</> : <><Icon name="Upload" size={16}/>Upload Document</>}
+        </button>
+      </form>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   DOCUMENT VIEW
+═══════════════════════════════════════════════════════════════════════════ */
+function DocView({ docId, setPage }) {
+  const { toast, user } = useContext(AppCtx);
+  const [doc,     setDoc]     = useState(null);
+  const [recs,    setRecs]    = useState([]);
+  const [comments,setComments]= useState([]);
+  const [loading, setLoading] = useState(true);
+  const [editing, setEditing] = useState(false);
+  const [editForm,setEditForm]= useState({});
+  const [newCmt,  setNewCmt]  = useState("");
+  const [bmLoading,setBmLoading]=useState(false);
+
+  const load = async () => {
+    try {
+      const [docData, recData, cmtData] = await Promise.all([
+        api(`/documents/${docId}`),
+        api(`/documents/${docId}/recommendations`),
+        api(`/documents/${docId}/comments`),
+      ]);
+      setDoc(docData); setRecs(recData.recommendations); setComments(cmtData.comments);
+      setEditForm({title:docData.title,description:docData.description,
+        course_code:docData.course_code,academic_level:docData.academic_level,
+        resource_type:docData.resource_type,academic_year:docData.academic_year});
+    } catch(e){ toast(e.message,"error"); }
+    finally { setLoading(false); }
+  };
+
+  useEffect(()=>{ load(); },[docId]);
+
+  const handleDownload = async () => {
+    try {
+      const token = localStorage.getItem("slu_token");
+      const res   = await fetch(`${API}/documents/${docId}/download`,{headers:{"Authorization":`Bearer ${token}`}});
+      if (!res.ok) throw new Error("Download failed");
+      const blob=await res.blob(); const url=URL.createObjectURL(blob);
+      const a=document.createElement("a"); a.href=url; a.download=doc.original_name; a.click();
+      URL.revokeObjectURL(url); toast("Download started","success");
+    } catch(ex){ toast(ex.message,"error"); }
+  };
+
+  const handleSave = async () => {
+    try { await api(`/documents/${docId}`,{method:"PUT",body:JSON.stringify(editForm)});
+      setDoc(d=>({...d,...editForm})); setEditing(false); toast("Updated","success");
+    } catch(ex){ toast(ex.message,"error"); }
+  };
+
+  const handleDelete = async () => {
+    if(!confirm("Delete this document permanently?")) return;
+    try { await api(`/documents/${docId}`,{method:"DELETE"}); toast("Deleted","success"); setPage("search"); }
+    catch(ex){ toast(ex.message,"error"); }
+  };
+
+  const toggleBookmark = async () => {
+    setBmLoading(true);
+    try {
+      const data=await api(`/bookmarks/${docId}`,{method:"POST"});
+      setDoc(d=>({...d,bookmarked:data.bookmarked}));
+      toast(data.bookmarked?"Bookmarked!":"Removed from bookmarks","success");
+    } catch(ex){ toast(ex.message,"error"); }
+    finally { setBmLoading(false); }
+  };
+
+  const submitComment = async e => {
+    e.preventDefault(); if (!newCmt.trim()) return;
+    try {
+      const data=await api(`/documents/${docId}/comments`,{method:"POST",body:JSON.stringify({content:newCmt})});
+      setComments(c=>[...c,data]); setNewCmt(""); toast("Comment added","success");
+    } catch(ex){ toast(ex.message,"error"); }
+  };
+
+  const deleteComment = async (cid) => {
+    try { await api(`/comments/${cid}`,{method:"DELETE"}); setComments(c=>c.filter(x=>x.id!==cid)); }
+    catch(ex){ toast(ex.message,"error"); }
+  };
+
+  if (loading) return (
+    <div className="space-y-4 anim-fade">
+      {[...Array(3)].map((_,i)=><div key={i} className="skeleton h-24 rounded-xl"/>)}
+    </div>
+  );
+  if (!doc) return <EmptyState icon="FileX" title="Document not found"/>;
+
+  const canEdit = user?.id===doc.uploader_id || user?.role==="admin";
+  const tags    = (doc.tags||"").split(",").filter(Boolean);
+
+  return (
+    <div className="anim-up">
+      <button onClick={()=>setPage("search")} className="flex items-center gap-1.5 text-sm text-slate-500 hover:text-slate-700 mb-6 transition">
+        <Icon name="ArrowLeft" size={15}/>Back to Search
+      </button>
+
+      <div className="grid grid-cols-1 xl:grid-cols-[1fr_300px] gap-6">
+        {/* Main */}
+        <div className="space-y-4">
+          {/* Doc card */}
+          <div className="bg-white rounded-2xl border border-slate-200 p-6">
+            {editing ? (
+              <div className="space-y-4">
+                <input value={editForm.title} onChange={e=>setEditForm(f=>({...f,title:e.target.value}))}
+                  className="w-full border border-slate-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:border-brand-400"/>
+                <textarea value={editForm.description} onChange={e=>setEditForm(f=>({...f,description:e.target.value}))}
+                  rows={3} className="w-full border border-slate-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:border-brand-400 resize-none"/>
+                <div className="grid grid-cols-2 gap-3">
+                  {["course_code","resource_type","academic_level","academic_year"].map(k=>(
+                    <input key={k} value={editForm[k]} onChange={e=>setEditForm(f=>({...f,[k]:e.target.value}))}
+                      placeholder={k.replace(/_/g," ")}
+                      className="border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-brand-400"/>
+                  ))}
+                </div>
+                <div className="flex gap-2">
+                  <button onClick={handleSave} className="bg-brand-500 text-white text-sm px-4 py-2 rounded-lg hover:bg-brand-600 transition">Save</button>
+                  <button onClick={()=>setEditing(false)} className="border border-slate-200 text-slate-600 text-sm px-4 py-2 rounded-lg hover:bg-slate-50 transition">Cancel</button>
+                </div>
+              </div>
+            ) : (
+              <>
+                <div className="flex items-start justify-between gap-4 mb-4">
+                  <div className="flex-1">
+                    <div className="flex flex-wrap items-center gap-2 mb-3">
+                      <FileBadge ext={doc.file_type}/>
+                      {doc.course_code    && <span className="text-xs font-semibold bg-blue-50 text-blue-600 border border-blue-100 rounded-full px-2.5 py-0.5">{doc.course_code}</span>}
+                      {doc.academic_level && <span className="text-xs font-semibold bg-amber-50 text-amber-600 border border-amber-100 rounded-full px-2.5 py-0.5">{doc.academic_level}</span>}
+                      {doc.resource_type  && <span className="text-xs font-semibold bg-emerald-50 text-emerald-600 border border-emerald-100 rounded-full px-2.5 py-0.5">{doc.resource_type}</span>}
+                    </div>
+                    <h1 className="text-xl font-bold text-slate-800 leading-tight">{doc.title}</h1>
+                  </div>
+                  {canEdit && (
+                    <div className="flex gap-2 flex-shrink-0">
+                      <button onClick={()=>setEditing(true)} className="p-2 border border-slate-200 rounded-lg hover:bg-slate-50 text-slate-500 hover:text-slate-700 transition"><Icon name="Pencil" size={15}/></button>
+                      <button onClick={handleDelete}          className="p-2 border border-red-100 rounded-lg hover:bg-red-50 text-red-400 hover:text-red-600 transition"><Icon name="Trash2" size={15}/></button>
+                    </div>
+                  )}
+                </div>
+
+                {doc.description && <p className="text-slate-600 text-sm mb-4 leading-relaxed">{doc.description}</p>}
+
+                {tags.length>0 && (
+                  <div className="mb-4">
+                    <div className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-2 flex items-center gap-1"><Icon name="Sparkles" size={10}/>AI-Generated Tags</div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {tags.map(t=><span key={t} className="text-xs bg-slate-50 border border-slate-100 text-slate-600 rounded-full px-2.5 py-1">{t}</span>)}
+                    </div>
+                  </div>
+                )}
+
+                <div className="border-t border-slate-100 pt-4 flex flex-wrap gap-5 text-xs text-slate-500">
+                  <span className="flex items-center gap-1.5"><Icon name="User" size={12}/>{doc.uploader_name}</span>
+                  <span className="flex items-center gap-1.5"><Icon name="Calendar" size={12}/>{fmtDate(doc.created_at)}</span>
+                  <span className="flex items-center gap-1.5"><Icon name="HardDrive" size={12}/>{fmtSize(doc.file_size)}</span>
+                  <span className="flex items-center gap-1.5"><Icon name="Eye" size={12}/>{doc.view_count} views</span>
+                  <span className="flex items-center gap-1.5"><Icon name="Download" size={12}/>{doc.download_count} downloads</span>
+                  {doc.academic_year && <span className="flex items-center gap-1.5"><Icon name="GraduationCap" size={12}/>{doc.academic_year}</span>}
+                </div>
+              </>
+            )}
+          </div>
+
+          {/* Actions */}
+          {!editing && (
+            <div className="flex gap-3">
+              <button onClick={handleDownload}
+                className="flex-1 flex items-center justify-center gap-2 bg-brand-500 hover:bg-brand-600 text-white font-semibold py-3 rounded-xl transition text-sm">
+                <Icon name="Download" size={16}/> Download ({fmtSize(doc.file_size)})
+              </button>
+              <button onClick={toggleBookmark} disabled={bmLoading}
+                className={`p-3 rounded-xl border transition ${doc.bookmarked?"bg-amber-50 border-amber-200 text-amber-500":"border-slate-200 hover:bg-slate-50 text-slate-400 hover:text-amber-500"}`}>
+                {bmLoading ? <Spinner size={18}/> : <Icon name={doc.bookmarked?"Bookmark":"BookmarkPlus"} size={18}/>}
+              </button>
+            </div>
+          )}
+
+          {/* Comments */}
+          <div className="bg-white rounded-2xl border border-slate-200 p-6">
+            <h3 className="font-semibold text-slate-700 mb-4 flex items-center gap-2">
+              <Icon name="MessageCircle" size={16}/> Discussion ({comments.length})
+            </h3>
+            <form onSubmit={submitComment} className="flex gap-3 mb-5">
+              <input value={newCmt} onChange={e=>setNewCmt(e.target.value)} placeholder="Add a comment…"
+                className="flex-1 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-brand-400 transition"/>
+              <button type="submit" className="bg-brand-500 hover:bg-brand-600 text-white px-4 py-2 rounded-lg text-sm font-medium transition">Post</button>
+            </form>
+            <div className="space-y-4">
+              {comments.map(c=>(
+                <div key={c.id} className="flex gap-3">
+                  <div className="w-8 h-8 bg-slate-100 rounded-full flex items-center justify-center flex-shrink-0 text-xs font-bold text-slate-600">
+                    {c.user_name?.[0]?.toUpperCase()}
+                  </div>
+                  <div className="flex-1 bg-slate-50 rounded-xl px-4 py-3">
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-xs font-semibold text-slate-700">{c.user_name}</span>
+                      <div className="flex items-center gap-2">
+                        <span className="text-[11px] text-slate-400">{fmtDate(c.created_at)}</span>
+                        {(user?.id===c.user_id||user?.role==="admin") && (
+                          <button onClick={()=>deleteComment(c.id)} className="text-slate-300 hover:text-red-400 transition"><Icon name="X" size={12}/></button>
+                        )}
+                      </div>
+                    </div>
+                    <p className="text-sm text-slate-700">{c.content}</p>
+                  </div>
+                </div>
+              ))}
+              {comments.length===0 && <p className="text-sm text-slate-400 text-center py-4">No comments yet. Start the discussion!</p>}
+            </div>
+          </div>
+        </div>
+
+        {/* Sidebar: Recommendations */}
+        <div>
+          <div className="bg-white rounded-2xl border border-slate-200 p-5 sticky top-4">
+            <h3 className="font-semibold text-slate-700 mb-4 flex items-center gap-2 text-sm">
+              <Icon name="Sparkles" size={15} className="text-brand-500"/> AI Recommendations
+            </h3>
+            <div className="space-y-3">
+              {recs.length>0 ? recs.map(rec=>(
+                <div key={rec.id} onClick={()=>setPage(`doc:${rec.id}`)}
+                  className="cursor-pointer rounded-xl border border-slate-100 p-3 hover:border-brand-200 hover:bg-brand-50/30 transition">
+                  <div className="flex items-center gap-2 mb-1.5">
+                    <FileBadge ext={rec.file_type}/>
+                    {rec.relevance && <span className="text-[10px] text-amber-600 font-semibold">{Math.round(Math.min(rec.relevance/8,1)*100)}%</span>}
+                  </div>
+                  <p className="text-xs font-semibold text-slate-700 leading-snug line-clamp-2">{rec.title}</p>
+                  {rec.course_code && <p className="text-[10px] text-slate-400 mt-1">{rec.course_code}</p>}
+                </div>
+              )) : (
+                <p className="text-sm text-slate-400 text-center py-6">Upload more documents to enable AI recommendations</p>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   MY DOCUMENTS
+═══════════════════════════════════════════════════════════════════════════ */
+function MyDocs({ setPage }) {
+  const { toast } = useContext(AppCtx);
+  const [docs, setDocs]     = useState([]);
+  const [loading, setLoading] = useState(true);
+  useEffect(()=>{
+    api("/documents/my").then(d=>setDocs(d.documents)).catch(e=>toast(e.message,"error")).finally(()=>setLoading(false));
+  },[]);
+  return (
+    <div className="anim-up">
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h1 className="text-xl font-bold text-slate-800">My Documents</h1>
+          <p className="text-sm text-slate-500 mt-0.5">{docs.length} document{docs.length!==1?"s":""} uploaded</p>
+        </div>
+        <button onClick={()=>setPage("upload")} className="flex items-center gap-2 bg-brand-500 hover:bg-brand-600 text-white text-sm font-semibold px-4 py-2.5 rounded-xl transition">
+          <Icon name="Plus" size={15}/>Upload New
+        </button>
+      </div>
+      {loading ? (
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">{[...Array(6)].map((_,i)=><SkeletonCard key={i}/>)}</div>
+      ) : docs.length>0 ? (
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
+          {docs.map(doc=><DocCard key={doc.id} doc={doc} setPage={setPage} onDelete={id=>setDocs(d=>d.filter(x=>x.id!==id))}/>)}
+        </div>
+      ) : (
+        <EmptyState icon="FolderOpen" title="No documents yet" desc="Upload your first academic resource to get started."
+          action={()=>setPage("upload")} actionLabel="Upload Now"/>
+      )}
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   BOOKMARKS
+═══════════════════════════════════════════════════════════════════════════ */
+function Bookmarks({ setPage }) {
+  const { toast } = useContext(AppCtx);
+  const [docs, setDocs]       = useState([]);
+  const [loading, setLoading] = useState(true);
+  useEffect(()=>{
+    api("/bookmarks").then(d=>setDocs(d.documents)).catch(e=>toast(e.message,"error")).finally(()=>setLoading(false));
+  },[]);
+  return (
+    <div className="anim-up">
+      <h1 className="text-xl font-bold text-slate-800 mb-6">Bookmarks</h1>
+      {loading ? (
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">{[...Array(3)].map((_,i)=><SkeletonCard key={i}/>)}</div>
+      ) : docs.length>0 ? (
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
+          {docs.map(doc=><DocCard key={doc.id} doc={doc} setPage={setPage}/>)}
+        </div>
+      ) : (
+        <EmptyState icon="Bookmark" title="No bookmarks yet" desc="Bookmark documents while viewing them to find them here."/>
+      )}
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   FACULTY PAGE
+═══════════════════════════════════════════════════════════════════════════ */
+function FacultyPage({ setPage }) {
+  const { toast } = useContext(AppCtx);
+  const [faculty, setFaculty] = useState([]);
+  const [loading, setLoading] = useState(true);
+  useEffect(()=>{
+    api("/faculty").then(d=>setFaculty(d.faculty)).catch(e=>toast(e.message,"error")).finally(()=>setLoading(false));
+  },[]);
+  return (
+    <div className="anim-up">
+      <h1 className="text-xl font-bold text-slate-800 mb-1">Faculty Directory</h1>
+      <p className="text-sm text-slate-500 mb-6">Browse documents by faculty member</p>
+      {loading ? (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">{[...Array(6)].map((_,i)=><SkeletonCard key={i}/>)}</div>
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          {faculty.map(f=>(
+            <div key={f.id} onClick={()=>setPage(`search:${f.id}`)}
+              className="bg-white rounded-xl border border-slate-200 p-5 cursor-pointer hover:border-brand-300 hover:shadow-md transition">
+              <div className="flex items-center gap-3 mb-3">
+                <div className="w-12 h-12 rounded-full bg-brand-500 flex items-center justify-center flex-shrink-0">
+                  <span className="text-white font-bold">{f.name?.[0]?.toUpperCase()}</span>
+                </div>
+                <div className="min-w-0">
+                  <div className="font-semibold text-slate-800 truncate">{f.name}</div>
+                  <div className="text-xs text-slate-500 truncate">{f.department}</div>
+                </div>
+              </div>
+              {f.bio && <p className="text-xs text-slate-500 line-clamp-2 mb-3">{f.bio}</p>}
+              <div className="text-xs font-semibold text-brand-500">{f.doc_count} document{f.doc_count!==1?"s":""}</div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   PROFILE
+═══════════════════════════════════════════════════════════════════════════ */
+function ProfilePage() {
+  const { toast, user, setUser } = useContext(AppCtx);
+  const [form,    setForm]    = useState({ name:user?.name||"", department:user?.department||"", bio:user?.bio||"" });
+  const [pwForm,  setPwForm]  = useState({ old_password:"", new_password:"", confirm:"" });
+  const [saving,  setSaving]  = useState(false);
+  const [pwSaving,setPwSaving]= useState(false);
+  const upd   = k => e => setForm(f=>({...f,[k]:e.target.value}));
+  const updPw = k => e => setPwForm(f=>({...f,[k]:e.target.value}));
+
+  const saveProfile = async e => {
+    e.preventDefault(); setSaving(true);
+    try {
+      const data = await api("/profile",{method:"PUT",body:JSON.stringify(form)});
+      const updated={...user,...form};
+      setUser(updated); localStorage.setItem("slu_user",JSON.stringify(updated));
+      toast("Profile updated","success");
+    } catch(ex){ toast(ex.message,"error"); }
+    finally { setSaving(false); }
+  };
+
+  const changePw = async e => {
+    e.preventDefault();
+    if (pwForm.new_password!==pwForm.confirm){ toast("Passwords don't match","error"); return; }
+    setPwSaving(true);
+    try {
+      await api("/auth/change-password",{method:"PUT",body:JSON.stringify({old_password:pwForm.old_password,new_password:pwForm.new_password})});
+      setPwForm({old_password:"",new_password:"",confirm:""});
+      toast("Password changed","success");
+    } catch(ex){ toast(ex.message,"error"); }
+    finally { setPwSaving(false); }
+  };
+
+  return (
+    <div className="anim-up max-w-2xl">
+      <h1 className="text-xl font-bold text-slate-800 mb-6">Profile Settings</h1>
+      {/* Avatar strip */}
+      <div className="flex items-center gap-4 bg-white rounded-2xl border border-slate-200 p-5 mb-6">
+        <div className="w-16 h-16 rounded-full bg-brand-500 flex items-center justify-center flex-shrink-0">
+          <span className="text-white text-2xl font-bold">{user?.name?.[0]?.toUpperCase()}</span>
+        </div>
+        <div>
+          <div className="font-bold text-slate-800 text-lg">{user?.name}</div>
+          <div className="text-sm text-slate-500">{user?.email}</div>
+          <span className={`inline-block mt-1 text-xs font-semibold px-2.5 py-0.5 rounded-full ${user?.role==="admin"?"bg-amber-100 text-amber-700":"bg-blue-100 text-blue-700"}`}>{user?.role}</span>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        {/* Profile form */}
+        <div className="bg-white rounded-2xl border border-slate-200 p-6">
+          <h2 className="font-semibold text-slate-700 mb-4 text-sm">Personal Information</h2>
+          <form onSubmit={saveProfile} className="space-y-4">
+            {[{k:"name",label:"Full Name",ph:"Dr. John Doe"},{k:"department",label:"Department",ph:"Computer Science"},{k:"bio",label:"Bio",ph:"Short description about yourself…",textarea:true}].map(({k,label,ph,textarea})=>(
+              <div key={k}>
+                <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1.5">{label}</label>
+                {textarea ? (
+                  <textarea value={form[k]} onChange={upd(k)} placeholder={ph} rows={4}
+                    className="w-full border border-slate-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:border-brand-400 resize-none transition"/>
+                ) : (
+                  <input value={form[k]} onChange={upd(k)} placeholder={ph}
+                    className="w-full border border-slate-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:border-brand-400 transition"/>
+                )}
+              </div>
+            ))}
+            <button type="submit" disabled={saving}
+              className="w-full flex items-center justify-center gap-2 bg-brand-500 hover:bg-brand-600 text-white font-semibold py-2.5 rounded-xl transition text-sm disabled:opacity-60">
+              {saving ? <Spinner size={15} className="text-white"/> : <Icon name="Save" size={15}/>}
+              Save Profile
+            </button>
+          </form>
+        </div>
+
+        {/* Password form */}
+        <div className="bg-white rounded-2xl border border-slate-200 p-6">
+          <h2 className="font-semibold text-slate-700 mb-4 text-sm">Change Password</h2>
+          <form onSubmit={changePw} className="space-y-4">
+            {[{k:"old_password",label:"Current Password"},{k:"new_password",label:"New Password"},{k:"confirm",label:"Confirm New Password"}].map(({k,label})=>(
+              <div key={k}>
+                <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1.5">{label}</label>
+                <input type="password" value={pwForm[k]} onChange={updPw(k)} placeholder="••••••••"
+                  className="w-full border border-slate-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:border-brand-400 transition"/>
+              </div>
+            ))}
+            <button type="submit" disabled={pwSaving}
+              className="w-full flex items-center justify-center gap-2 border-2 border-slate-200 hover:border-brand-300 text-slate-700 font-semibold py-2.5 rounded-xl transition text-sm disabled:opacity-60">
+              {pwSaving ? <Spinner size={15}/> : <Icon name="Lock" size={15}/>}
+              Update Password
+            </button>
+          </form>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   ADMIN STATS
+═══════════════════════════════════════════════════════════════════════════ */
+function AdminStats() {
+  const { toast }  = useContext(AppCtx);
+  const [stats, setStats]    = useState(null);
+  const [report, setReport]  = useState(null);
+  const [loading, setLoading]= useState(true);
+  useEffect(()=>{
+    Promise.all([api("/admin/stats"),api("/admin/reports/usage")])
+      .then(([s,r])=>{setStats(s);setReport(r);})
+      .catch(e=>toast(e.message,"error"))
+      .finally(()=>setLoading(false));
+  },[]);
+
+  if (loading) return <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">{[...Array(6)].map((_,i)=><div key={i} className="skeleton h-24 rounded-xl"/>)}</div>;
+  if (!stats)  return <EmptyState icon="BarChart3" title="No stats available"/>;
+
+  const kpis=[
+    {label:"Documents",  v:stats.total_documents, icon:"FileText",    color:"text-brand-600",   bg:"bg-brand-50"},
+    {label:"Users",      v:stats.total_users,     icon:"Users",        color:"text-blue-600",    bg:"bg-blue-50"},
+    {label:"Downloads",  v:stats.total_downloads, icon:"Download",     color:"text-emerald-600", bg:"bg-emerald-50"},
+    {label:"Views",      v:stats.total_views,     icon:"Eye",          color:"text-cyan-600",    bg:"bg-cyan-50"},
+    {label:"Bookmarks",  v:stats.total_bookmarks, icon:"Bookmark",     color:"text-amber-600",   bg:"bg-amber-50"},
+    {label:"Comments",   v:stats.total_comments,  icon:"MessageCircle",color:"text-purple-600",  bg:"bg-purple-50"},
+    {label:"Searches",   v:stats.total_searches,  icon:"Search",       color:"text-slate-600",   bg:"bg-slate-50"},
+  ];
+
+  const maxType = Math.max(1,...stats.by_type.map(t=>t.cnt));
+
+  return (
+    <div className="anim-up space-y-6">
+      <h1 className="text-xl font-bold text-slate-800">Analytics Dashboard</h1>
+
+      {/* KPIs */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 xl:grid-cols-7 gap-4">
+        {kpis.map(s=>(
+          <div key={s.label} className="bg-white rounded-xl border border-slate-200 p-4">
+            <div className={`w-9 h-9 rounded-xl ${s.bg} flex items-center justify-center mb-3`}>
+              <Icon name={s.icon} size={17} className={s.color}/>
+            </div>
+            <div className={`text-xl font-bold ${s.color} mb-0.5`}>{s.v?.toLocaleString()}</div>
+            <div className="text-xs text-slate-500">{s.label}</div>
+          </div>
+        ))}
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        {/* By type */}
+        <div className="bg-white rounded-2xl border border-slate-200 p-5">
+          <h3 className="font-semibold text-slate-700 mb-4 text-sm">Documents by Type</h3>
+          <div className="space-y-3">
+            {stats.by_type.map(t=>(
+              <div key={t.resource_type}>
+                <div className="flex justify-between text-xs mb-1">
+                  <span className="text-slate-600">{t.resource_type||"Uncategorized"}</span>
+                  <span className="font-bold text-slate-800">{t.cnt}</span>
+                </div>
+                <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                  <div className="h-full bg-brand-400 rounded-full" style={{width:`${(t.cnt/maxType)*100}%`}}/>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* By course */}
+        <div className="bg-white rounded-2xl border border-slate-200 p-5">
+          <h3 className="font-semibold text-slate-700 mb-4 text-sm">Top Courses</h3>
+          <div className="space-y-2.5">
+            {stats.by_course.slice(0,8).map(c=>(
+              <div key={c.course_code} className="flex items-center justify-between">
+                <span className="text-xs font-semibold bg-blue-50 text-blue-600 border border-blue-100 rounded-full px-2.5 py-1">{c.course_code}</span>
+                <span className="text-xs font-bold text-slate-700">{c.cnt} docs</span>
+              </div>
+            ))}
+            {stats.by_course.length===0 && <p className="text-xs text-slate-400 text-center py-4">No data yet</p>}
+          </div>
+        </div>
+
+        {/* Recent uploads */}
+        <div className="bg-white rounded-2xl border border-slate-200 p-5">
+          <h3 className="font-semibold text-slate-700 mb-4 text-sm">Recent Uploads</h3>
+          <div className="space-y-3">
+            {stats.recent_uploads.map((r,i)=>(
+              <div key={r.id} className={`text-xs pb-3 ${i<stats.recent_uploads.length-1?"border-b border-slate-100":""}`}>
+                <div className="font-semibold text-slate-700 truncate">{r.title}</div>
+                <div className="text-slate-400 mt-0.5 flex items-center justify-between">
+                  <span>{r.uploader_name}</span>
+                  <span>{fmtDate(r.created_at)}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Top downloads */}
+      {report?.top_documents?.length>0 && (
+        <div className="bg-white rounded-2xl border border-slate-200 p-5">
+          <h3 className="font-semibold text-slate-700 mb-4 text-sm">Most Downloaded Documents</h3>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead><tr className="text-left text-xs font-semibold text-slate-400 border-b border-slate-100">
+                <th className="pb-3 pr-4">Title</th>
+                <th className="pb-3 text-center">Downloads</th>
+                <th className="pb-3 text-center">Views</th>
+              </tr></thead>
+              <tbody className="divide-y divide-slate-50">
+                {report.top_documents.map(d=>(
+                  <tr key={d.id}>
+                    <td className="py-3 pr-4 font-medium text-slate-700 truncate max-w-xs">{d.title}</td>
+                    <td className="py-3 text-center text-emerald-600 font-bold">{d.download_count}</td>
+                    <td className="py-3 text-center text-blue-600 font-bold">{d.view_count}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   ADMIN USERS
+═══════════════════════════════════════════════════════════════════════════ */
+function AdminUsers() {
+  const { toast }  = useContext(AppCtx);
+  const [users, setUsers]    = useState([]);
+  const [loading, setLoading]= useState(true);
+  const [editing, setEditing]= useState(null);
+
+  const load = () => {
+    api("/admin/users").then(d=>setUsers(d.users)).catch(e=>toast(e.message,"error")).finally(()=>setLoading(false));
+  };
+  useEffect(load,[]);
+
+  const updateUser = async (uid, data) => {
+    try { await api(`/admin/users/${uid}`,{method:"PUT",body:JSON.stringify(data)}); toast("Updated","success"); load(); setEditing(null); }
+    catch(ex){ toast(ex.message,"error"); }
+  };
+  const deactivate = async uid => {
+    if (!confirm("Deactivate this user?")) return;
+    try { await api(`/admin/users/${uid}`,{method:"DELETE"}); toast("Deactivated","success"); load(); }
+    catch(ex){ toast(ex.message,"error"); }
+  };
+
+  return (
+    <div className="anim-up">
+      <h1 className="text-xl font-bold text-slate-800 mb-6">Manage Users</h1>
+      {loading ? <div className="space-y-3">{[...Array(5)].map((_,i)=><div key={i} className="skeleton h-16 rounded-xl"/>)}</div> : (
+        <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead><tr className="bg-slate-50 text-xs font-semibold text-slate-500 uppercase tracking-wide border-b border-slate-100">
+                <th className="text-left px-5 py-3">User</th>
+                <th className="text-left px-4 py-3">Department</th>
+                <th className="text-center px-4 py-3">Role</th>
+                <th className="text-center px-4 py-3">Docs</th>
+                <th className="text-center px-4 py-3">Status</th>
+                <th className="text-center px-4 py-3">Actions</th>
+              </tr></thead>
+              <tbody className="divide-y divide-slate-50">
+                {users.map(u=>(
+                  <tr key={u.id} className="hover:bg-slate-50/50 transition">
+                    <td className="px-5 py-4">
+                      <div className="flex items-center gap-3">
+                        <div className="w-8 h-8 rounded-full bg-brand-100 text-brand-600 flex items-center justify-center font-bold text-xs flex-shrink-0">
+                          {u.name?.[0]?.toUpperCase()}
+                        </div>
+                        <div>
+                          <div className="font-semibold text-slate-800">{u.name}</div>
+                          <div className="text-xs text-slate-400">{u.email}</div>
+                        </div>
+                      </div>
+                    </td>
+                    <td className="px-4 py-4 text-slate-600 text-xs">{u.department||"—"}</td>
+                    <td className="px-4 py-4 text-center">
+                      <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${u.role==="admin"?"bg-amber-100 text-amber-700":"bg-blue-100 text-blue-700"}`}>{u.role}</span>
+                    </td>
+                    <td className="px-4 py-4 text-center font-bold text-slate-700">{u.doc_count}</td>
+                    <td className="px-4 py-4 text-center">
+                      <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${u.active?"bg-emerald-100 text-emerald-700":"bg-red-100 text-red-600"}`}>
+                        {u.active?"Active":"Inactive"}
+                      </span>
+                    </td>
+                    <td className="px-4 py-4 text-center">
+                      <div className="flex items-center justify-center gap-2">
+                        <button onClick={()=>setEditing(u)} className="p-1.5 border border-slate-200 rounded-lg hover:bg-slate-50 text-slate-500 transition"><Icon name="Pencil" size={13}/></button>
+                        {u.active && <button onClick={()=>deactivate(u.id)} className="p-1.5 border border-red-100 rounded-lg hover:bg-red-50 text-red-400 transition"><Icon name="UserX" size={13}/></button>}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Edit modal */}
+      {editing && (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6 anim-up">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-bold text-slate-800">Edit User</h3>
+              <button onClick={()=>setEditing(null)} className="text-slate-400 hover:text-slate-600"><Icon name="X" size={18}/></button>
+            </div>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1.5">Name</label>
+                <input value={editing.name} onChange={e=>setEditing(u=>({...u,name:e.target.value}))}
+                  className="w-full border border-slate-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:border-brand-400"/>
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1.5">Role</label>
+                <select value={editing.role} onChange={e=>setEditing(u=>({...u,role:e.target.value}))}
+                  className="w-full border border-slate-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:border-brand-400 bg-white">
+                  <option value="faculty">Faculty</option>
+                  <option value="admin">Admin</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1.5">Department</label>
+                <input value={editing.department} onChange={e=>setEditing(u=>({...u,department:e.target.value}))}
+                  className="w-full border border-slate-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:border-brand-400"/>
+              </div>
+            </div>
+            <div className="flex gap-3 mt-6">
+              <button onClick={()=>updateUser(editing.id,{name:editing.name,role:editing.role,department:editing.department})}
+                className="flex-1 bg-brand-500 hover:bg-brand-600 text-white font-semibold py-2.5 rounded-xl transition text-sm">Save</button>
+              <button onClick={()=>setEditing(null)}
+                className="flex-1 border border-slate-200 text-slate-600 font-semibold py-2.5 rounded-xl hover:bg-slate-50 transition text-sm">Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   ADMIN ALL DOCS
+═══════════════════════════════════════════════════════════════════════════ */
+function AdminDocs({ setPage }) {
+  const { toast }  = useContext(AppCtx);
+  const [docs, setDocs]      = useState([]);
+  const [loading, setLoading]= useState(true);
+  useEffect(()=>{
+    api("/admin/documents").then(d=>setDocs(d.documents)).catch(e=>toast(e.message,"error")).finally(()=>setLoading(false));
+  },[]);
+  return (
+    <div className="anim-up">
+      <h1 className="text-xl font-bold text-slate-800 mb-6">All Documents ({docs.length})</h1>
+      {loading ? (
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">{[...Array(6)].map((_,i)=><SkeletonCard key={i}/>)}</div>
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
+          {docs.map(doc=><DocCard key={doc.id} doc={doc} setPage={setPage} onDelete={id=>setDocs(d=>d.filter(x=>x.id!==id))}/>)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   ADMIN ACTIVITY
+═══════════════════════════════════════════════════════════════════════════ */
+function AdminActivity() {
+  const { toast }  = useContext(AppCtx);
+  const [log, setLog]        = useState([]);
+  const [loading, setLoading]= useState(true);
+  useEffect(()=>{
+    api("/admin/activity").then(d=>setLog(d.activity)).catch(e=>toast(e.message,"error")).finally(()=>setLoading(false));
+  },[]);
+  const ACTION_META = {
+    login:    {icon:"LogIn",    color:"text-blue-500",   bg:"bg-blue-50"},
+    upload:   {icon:"Upload",   color:"text-emerald-500",bg:"bg-emerald-50"},
+    download: {icon:"Download", color:"text-brand-500",  bg:"bg-brand-50"},
+    view:     {icon:"Eye",      color:"text-slate-500",  bg:"bg-slate-50"},
+    delete:   {icon:"Trash2",   color:"text-red-500",    bg:"bg-red-50"},
+  };
+  return (
+    <div className="anim-up">
+      <h1 className="text-xl font-bold text-slate-800 mb-6">Activity Log</h1>
+      {loading ? <div className="space-y-3">{[...Array(8)].map((_,i)=><div key={i} className="skeleton h-14 rounded-xl"/>)}</div> : (
+        <div className="bg-white rounded-2xl border border-slate-200 divide-y divide-slate-50">
+          {log.map(a=>{
+            const m=ACTION_META[a.action]||{icon:"Activity",color:"text-slate-500",bg:"bg-slate-50"};
+            return (
+              <div key={a.id} className="flex items-center gap-4 px-5 py-3.5 hover:bg-slate-50/50 transition">
+                <div className={`w-8 h-8 rounded-full ${m.bg} flex items-center justify-center flex-shrink-0`}>
+                  <Icon name={m.icon} size={14} className={m.color}/>
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm text-slate-700">
+                    <span className="font-semibold">{a.user_name||"Unknown"}</span>
+                    <span className="text-slate-400"> · {a.action}</span>
+                    {a.doc_title && <span className="text-slate-500"> — {a.doc_title}</span>}
+                  </div>
+                </div>
+                <div className="text-xs text-slate-400 flex-shrink-0">{fmtDate(a.created_at)}</div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   LANDING / MARKETING SECTION
+═══════════════════════════════════════════════════════════════════════════ */
+function Landing({onSignIn}) {
+  return (
+    <header className="bg-gradient-to-r from-brand-700 to-brand-500 text-white">
+      <div className="max-w-6xl mx-auto px-6 py-6 flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-lg bg-white/10 flex items-center justify-center"><Icon name="BookOpen" size={18} className="text-white"/></div>
+          <div className="font-semibold text-lg">SLU Repository</div>
+        </div>
+        <nav className="hidden md:flex gap-6 items-center text-sm">
+          <a href="#hero" className="hover:underline">Home</a>
+          <a href="#features" className="hover:underline">Features</a>
+          <a href="#about" className="hover:underline">About</a>
+          <button onClick={()=>onSignIn && onSignIn()}
+            className="ml-4 bg-white/10 hover:bg-white/20 px-4 py-2 rounded-lg">Sign In</button>
+        </nav>
+      </div>
+
+      <section id="hero" className="py-20">
+        <div className="max-w-6xl mx-auto px-6 grid md:grid-cols-2 gap-12 items-center">
+          <div>
+            <h1 className="text-4xl md:text-5xl font-bold text-slate-900">A modern knowledge hub for faculty</h1>
+            <p className="mt-4 text-slate-600 max-w-xl">Secure, AI-powered repository designed for research and teaching — fast uploads, semantic search, smart recommendations, and team collaboration.</p>
+            <div className="mt-6 flex flex-wrap gap-3">
+              <button onClick={()=>onSignIn && onSignIn()}
+                className="inline-flex items-center gap-2 bg-brand-500 hover:bg-brand-600 text-white font-semibold px-6 py-3 rounded-lg">Get Started</button>
+              <a href="#features" className="inline-flex items-center gap-2 text-slate-700 px-5 py-3 rounded-lg border border-slate-200">Learn More</a>
+            </div>
+            <div className="mt-6 flex flex-wrap gap-4 text-sm text-slate-500">
+              <div className="flex items-center gap-2"><Icon name="Shield" size={14} className="text-brand-500"/> Enterprise-grade security</div>
+              <div className="flex items-center gap-2"><Icon name="Sparkles" size={14} className="text-brand-500"/> AI semantic search</div>
+              <div className="flex items-center gap-2"><Icon name="UploadCloud" size={14} className="text-brand-500"/> Bulk uploads & indexing</div>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-2xl shadow-xl p-6">
+            <div className="grid grid-cols-1 gap-4">
+              <div className="flex items-start gap-3">
+                <div className="w-11 h-11 rounded-lg bg-brand-50 flex items-center justify-center text-brand-600"><Icon name="Search" size={18} className="text-brand-600"/></div>
+                <div>
+                  <div className="font-semibold text-slate-800">Semantic Search</div>
+                  <div className="text-sm text-slate-500">Find relevant content using AI-powered embeddings.</div>
+                </div>
+              </div>
+              <div className="flex items-start gap-3">
+                <div className="w-11 h-11 rounded-lg bg-emerald-50 flex items-center justify-center text-emerald-600"><Icon name="Upload" size={18} className="text-emerald-600"/></div>
+                <div>
+                  <div className="font-semibold text-slate-800">Smart Uploads</div>
+                  <div className="text-sm text-slate-500">Auto-classify, tag and index documents instantly.</div>
+                </div>
+              </div>
+              <div className="flex items-start gap-3">
+                <div className="w-11 h-11 rounded-lg bg-blue-50 flex items-center justify-center text-blue-600"><Icon name="Users" size={18} className="text-blue-600"/></div>
+                <div>
+                  <div className="font-semibold text-slate-800">Team Collaboration</div>
+                  <div className="text-sm text-slate-500">Share collections, bookmark and discuss resources.</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="features" className="bg-slate-50 py-12">
+        <div className="max-w-6xl mx-auto px-6">
+          <h3 className="text-lg font-semibold text-slate-800">Why SLU Repository</h3>
+          <div className="mt-6 grid sm:grid-cols-2 lg:grid-cols-4 gap-6">
+            {[
+              {icon:'FileText',t:'Centralized Library',d:'All faculty materials in a secure, searchable store.'},
+              {icon:'Cpu',t:'AI Assist',d:'Semantic search and recommendations to surface relevant work.'},
+              {icon:'Lock',t:'Access Control',d:'Private/public documents and admin controls.'},
+              {icon:'Repeat',t:'Versioning Ready',d:'Safe uploads and audit logs for governance.'},
+            ].map((f,i)=>(
+              <div key={i} className="bg-white p-5 rounded-xl border border-slate-100">
+                <div className="flex items-center gap-3 mb-3"><Icon name={f.icon} size={18} className="text-brand-500"/><div className="font-semibold text-slate-800">{f.t}</div></div>
+                <div className="text-sm text-slate-500">{f.d}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <footer className="bg-slate-900 text-slate-300 py-8">
+        <div className="max-w-6xl mx-auto px-6 flex flex-col md:flex-row justify-between gap-6">
+          <div>
+            <div className="text-white font-semibold">SLU Repository</div>
+            <div className="text-sm mt-2 text-slate-400">Department of Computer Science · Kafin Hausa State University</div>
+          </div>
+          <div className="text-sm text-slate-400">© {new Date().getFullYear()} SLU Faculty Repository — Built for research and teaching.</div>
+        </div>
+      </footer>
+    </header>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   APP SHELL
+═══════════════════════════════════════════════════════════════════════════ */
+function App() {
+  const [user, setUser]       = useState(()=>{ try{return JSON.parse(localStorage.getItem("slu_user"));}catch{return null;} });
+  const [page, setPage]       = useState("dashboard");
+  const [toasts, setToasts]   = useState([]);
+  const [sidebarOpen,setSidebar]=useState(false);
+  const [showAuth, setShowAuth] = useState(false);
+
+  const toast = (msg, type="info") => {
+    const id = Date.now();
+    setToasts(t=>[...t,{id,msg,type}]);
+    setTimeout(()=>setToasts(t=>t.filter(x=>x.id!==id)), 3500);
+  };
+
+  const logout = () => {
+    localStorage.removeItem("slu_token");
+    localStorage.removeItem("slu_user");
+    setUser(null); setPage("dashboard"); setShowAuth(false);
+  };
+
+  if (!user) return (
+    <AppCtx.Provider value={{toast,user,setUser}}>
+      <Landing onSignIn={()=>setShowAuth(true)}/>
+      {showAuth && (
+        <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-md">
+            <AuthPage onLogin={u=>{setUser(u);setPage("dashboard");setShowAuth(false);}}/>
+          </div>
+        </div>
+      )}
+      <ToastContainer toasts={toasts}/>
+    </AppCtx.Provider>
+  );
+
+  // Parse page
+  let currentPage=page, docId=null, authorFilter=null;
+  if (page.startsWith("doc:"))    { docId=parseInt(page.split(":")[1]); currentPage="doc-view"; }
+  if (page.startsWith("search:")) { authorFilter=page.split(":")[1];    currentPage="search"; }
+
+  const renderPage = () => {
+    switch(currentPage){
+      case "dashboard":      return <Dashboard user={user} setPage={setPage}/>;
+      case "search":         return <SearchPage setPage={setPage} authorFilter={authorFilter}/>;
+      case "upload":         return <UploadPage setPage={setPage}/>;
+      case "my-docs":        return <MyDocs setPage={setPage}/>;
+      case "bookmarks":      return <Bookmarks setPage={setPage}/>;
+      case "faculty":        return <FacultyPage setPage={setPage}/>;
+      case "profile":        return <ProfilePage/>;
+      case "admin-stats":    return <AdminStats/>;
+      case "admin-users":    return <AdminUsers/>;
+      case "admin-docs":     return <AdminDocs setPage={setPage}/>;
+      case "admin-activity": return <AdminActivity/>;
+      case "doc-view":       return <DocView docId={docId} setPage={setPage}/>;
+      default:               return <Dashboard user={user} setPage={setPage}/>;
+    }
+  };
+
+  return (
+    <AppCtx.Provider value={{toast,user,setUser}}>
+      {!user && <Landing onSignIn={()=>setShowAuth(true)}/>} 
+      {showAuth && !user && (
+        <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-md">
+            <AuthPage onLogin={u=>{setUser(u);setPage("dashboard");setShowAuth(false);}}/>
+          </div>
+        </div>
+      )}
+
+      <div className="flex min-h-screen overflow-hidden bg-slate-50">
+        {/* Mobile overlay */}
+        {sidebarOpen && (
+          <div className="fixed inset-0 bg-black/40 z-40 lg:hidden" onClick={()=>setSidebar(false)}/>
+        )}
+
+        <Sidebar active={currentPage} setPage={p=>{setPage(p);setSidebar(false);}}
+          user={user} logout={logout} open={sidebarOpen}/>
+
+        <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+          {/* Top bar */}
+          <header className="h-14 bg-white border-b border-slate-200 flex items-center px-4 gap-3 flex-shrink-0 sticky top-0 z-30">
+            <button onClick={()=>setSidebar(o=>!o)} className="p-2 rounded-lg hover:bg-slate-100 text-slate-500 lg:hidden">
+              <Icon name="Menu" size={18}/>
+            </button>
+            <div className="flex-1 text-sm text-slate-500 font-medium truncate">
+              {user.name} &nbsp;·&nbsp; {user.department||"CS Department"}
+            </div>
+            <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${user.role==="admin"?"bg-amber-100 text-amber-700":"bg-blue-100 text-blue-700"}`}>
+              {user.role}
+            </span>
+          </header>
+
+          {/* Main content */}
+          <main className="flex-1 overflow-y-auto">
+            <div className="max-w-6xl mx-auto p-6">
+              {renderPage()}
+            </div>
+          </main>
+        </div>
+      </div>
+      <ToastContainer toasts={toasts}/>
+    </AppCtx.Provider>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>

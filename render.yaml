@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: slu-faculty-repo
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 2 --timeout 120
+    disk:
+      name: slu-data
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: UPLOAD_DIR
+        value: /data/uploads
+      - key: DB_PATH
+        value: /data/repository.db
+      - key: SECRET_KEY
+        generateValue: true
+      - key: HF_SPACE_URL
+        sync: false   # paste your HF Space URL here e.g. https://yourname-slu-ai-engine.hf.space
+      - key: HF_API_KEY
+        sync: false   # optional — leave blank for open access
