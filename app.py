@@ -183,13 +183,17 @@ def require_auth(f):
     def w(*a, **kw):
         auth = request.headers.get("Authorization","")
         if not auth.startswith("Bearer "):
-            return jsonify({"error":"Missing token"}), 401
+            return jsonify({"error": f"Missing token format. Header: {auth[:20]}"}), 401
         try:
             # 1. Clean token from frontend formatting issues (extra quotes, etc)
             raw_token = auth.split(" ", 1)[1].strip().strip('"').strip("'")
             
+            # Catch accidental double "Bearer " from messy frontend strings
+            if raw_token.lower().startswith("bearer "):
+                raw_token = raw_token[7:].strip().strip('"').strip("'")
+            
             if raw_token in ("null", "undefined", ""):
-                return jsonify({"error": "No valid token provided"}), 401
+                return jsonify({"error": "No valid token provided (null/undefined)"}), 401
                 
             # 2. Decode with 5 minutes leeway to prevent server clock skew errors
             d = jwt.decode(raw_token, SECRET, algorithms=["HS256"], leeway=300)
@@ -203,9 +207,12 @@ def require_auth(f):
                 
         except jwt.ExpiredSignatureError:
             return jsonify({"error":"Token expired"}), 401
+        except jwt.InvalidTokenError as e:
+            # THIS TELLS US EXACTLY WHAT IS WRONG:
+            return jsonify({"error": f"Token error: {str(e)} | Preview: {raw_token[:15]}..."}), 401
         except Exception as e:
             log.error(f"JWT error on {request.path}: {type(e).__name__} - {e}")
-            return jsonify({"error": "Invalid token"}), 401
+            return jsonify({"error": f"System error: {str(e)}"}), 401
         return f(*a, **kw)
     return w
 
