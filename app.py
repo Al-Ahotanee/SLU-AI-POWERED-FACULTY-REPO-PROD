@@ -10,7 +10,7 @@
 ╚══════════════════════════════════════════════════════════════════════╝
 """
 
-import os, json, re, math, uuid, logging
+import os, json, re, math, uuid, logging, time
 from datetime import datetime, timedelta, timezone
 def _utcnow(): return datetime.now(timezone.utc)
 from functools import wraps
@@ -166,10 +166,16 @@ def init_db():
             log.info("Default admin created: admin@slu.edu.ng / Admin@1234")
 
 # ── auth helpers ──────────────────────────────────────────────────────────────
+
 def make_token(uid, role):
-    t = jwt.encode({"sub":uid,"role":role,
-                    "exp": _utcnow()+timedelta(days=JWT_DAYS),
-                    "iat": _utcnow()}, SECRET, algorithm="HS256")
+    # Use exact integer timestamps to prevent PyJWT datetime parsing bugs
+    now = int(time.time())
+    t = jwt.encode({
+        "sub": uid,
+        "role": role,
+        "exp": now + (JWT_DAYS * 86400),
+        "iat": now
+    }, SECRET, algorithm="HS256")
     return t if isinstance(t, str) else t.decode()
 
 def require_auth(f):
@@ -179,12 +185,27 @@ def require_auth(f):
         if not auth.startswith("Bearer "):
             return jsonify({"error":"Missing token"}), 401
         try:
-            d = jwt.decode(auth.split(" ",1)[1], SECRET, algorithms=["HS256"])
-            g.user_id = d["sub"]; g.user_role = d["role"]
+            # 1. Clean token from frontend formatting issues (extra quotes, etc)
+            raw_token = auth.split(" ", 1)[1].strip().strip('"').strip("'")
+            
+            if raw_token in ("null", "undefined", ""):
+                return jsonify({"error": "No valid token provided"}), 401
+                
+            # 2. Decode with 5 minutes leeway to prevent server clock skew errors
+            d = jwt.decode(raw_token, SECRET, algorithms=["HS256"], leeway=300)
+            g.user_id = d["sub"]
+            g.user_role = d["role"]
+            
+            # 3. Security: Check if user STILL exists (handles database wipes)
+            db = get_db()
+            if not db.execute("SELECT id FROM users WHERE id=? AND active=1", (g.user_id,)).fetchone():
+                return jsonify({"error": "User account no longer exists. Please log in again."}), 401
+                
         except jwt.ExpiredSignatureError:
             return jsonify({"error":"Token expired"}), 401
-        except Exception:
-            return jsonify({"error":"Invalid token"}), 401
+        except Exception as e:
+            log.error(f"JWT error on {request.path}: {type(e).__name__} - {e}")
+            return jsonify({"error": "Invalid token"}), 401
         return f(*a, **kw)
     return w
 
