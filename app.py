@@ -74,7 +74,7 @@ app.config["MAX_CONTENT_LENGTH"] = MAX_BYTES
 CORS(app, resources={r"/api/*": {"origins": "*"}},
      supports_credentials=True,
      allow_headers=["Content-Type","Authorization"])
-
+init_db()
 # ── db ────────────────────────────────────────────────────────────────────────
 def get_db():
     if "db" not in g:
