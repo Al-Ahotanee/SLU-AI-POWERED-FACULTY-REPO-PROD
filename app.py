@@ -1,16 +1,16 @@
 """
 ╔══════════════════════════════════════════════════════════════════════╗
-║   AI-Powered Faculty Repository System                              ║
-║   Kafin Hausa State University · Dept. of Computer Science         ║
-║   Stack: Flask + SQLite + React 18 + Tailwind CSS + Lucide Icons   ║
-║                                                                     ║
-║   AI ENGINE: Hugging Face Space (sentence-transformers)            ║
-║   Set env var  HF_SPACE_URL = https://<user>-<space>.hf.space      ║
-║   Optional:    HF_API_KEY   = <your-secret-key>                    ║
+║   AI-Powered Faculty Repository System                               ║
+║   Kafin Hausa State University · Dept. of Computer Science           ║
+║   Stack: Flask + SQLite + React 18 + Tailwind CSS + Lucide Icons     ║
+║                                                                      ║
+║   AI ENGINE: Hugging Face Space (sentence-transformers)              ║
+║   Set env var  HF_SPACE_URL = https://<user>-<space>.hf.space        ║
+║   Optional:    HF_API_KEY   = <your-secret-key>                      ║
 ╚══════════════════════════════════════════════════════════════════════╝
 """
 
-import os, json, re, math, uuid, logging, threading
+import os, json, re, math, uuid, logging
 from datetime import datetime, timedelta, timezone
 def _utcnow(): return datetime.now(timezone.utc)
 from functools import wraps
@@ -56,6 +56,7 @@ except ImportError:                 HAS_PPTX = False
 
 # ── config ────────────────────────────────────────────────────────────────────
 BASE_DIR   = Path(__file__).parent
+# Safe fallback to local folders to prevent Render permission denied errors
 UPLOAD_DIR = Path(os.environ.get("UPLOAD_DIR", str(BASE_DIR / "uploads")))
 DB_PATH    = Path(os.environ.get("DB_PATH",    str(BASE_DIR / "repository.db")))
 SECRET     = os.environ.get("SECRET_KEY", "slu-faculty-repo-secret-key-2024!!")
@@ -64,9 +65,10 @@ MAX_BYTES  = int(os.environ.get("MAX_MB", 50)) * 1024 * 1024
 PORT       = int(os.environ.get("PORT", 5000))
 ALLOWED    = {".pdf",".docx",".pptx",".txt",".xlsx",".png",".jpg",".jpeg"}
 
+# Ensure upload directory exists
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-logging.basicConfig(level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s")
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("SLURepo")
 
 app = Flask(__name__, static_folder=str(BASE_DIR), static_url_path="")
@@ -74,12 +76,11 @@ app.config["MAX_CONTENT_LENGTH"] = MAX_BYTES
 CORS(app, resources={r"/api/*": {"origins": "*"}},
      supports_credentials=True,
      allow_headers=["Content-Type","Authorization"])
-init_db()
+
 # ── db ────────────────────────────────────────────────────────────────────────
 def get_db():
     if "db" not in g:
-        g.db = sqlite3.connect(str(DB_PATH), detect_types=sqlite3.PARSE_DECLTYPES,
-                               check_same_thread=False)
+        g.db = sqlite3.connect(str(DB_PATH), detect_types=sqlite3.PARSE_DECLTYPES, check_same_thread=False)
         g.db.row_factory = sqlite3.Row
         g.db.execute("PRAGMA foreign_keys = ON")
         g.db.execute("PRAGMA journal_mode = WAL")
@@ -91,6 +92,7 @@ def close_db(e=None):
     if db: db.close()
 
 def init_db():
+    """Initializes tables and injects default admin if missing."""
     with app.app_context():
         db = get_db()
         db.executescript("""
@@ -161,7 +163,7 @@ def init_db():
             db.execute("INSERT INTO users (name,email,password,role,department) VALUES (?,?,?,?,?)",
                        ("System Admin","admin@slu.edu.ng", pw,"admin","Computer Science"))
             db.commit()
-            log.info("Default admin: admin@slu.edu.ng / Admin@1234")
+            log.info("Default admin created: admin@slu.edu.ng / Admin@1234")
 
 # ── auth helpers ──────────────────────────────────────────────────────────────
 def make_token(uid, role):
@@ -204,8 +206,7 @@ def extract_text(path, ext):
             return " ".join(p.text for p in _DocxDoc(str(path)).paragraphs)[:50000]
         if ext == ".pptx" and HAS_PPTX:
             prs = Presentation(str(path))
-            return " ".join(s.text for sl in prs.slides
-                            for s in sl.shapes if hasattr(s,"text"))[:50000]
+            return " ".join(s.text for sl in prs.slides for s in sl.shapes if hasattr(s,"text"))[:50000]
         if ext == ".txt":
             return path.read_text(errors="ignore")[:50000]
     except Exception as e:
@@ -305,8 +306,7 @@ def cos_dict(v1,v2):
     keys = set(v1)&set(v2)
     if not keys: return 0.0
     dot = sum(v1[k]*v2[k] for k in keys)
-    return dot/(math.sqrt(sum(x*x for x in v1.values()))*
-                math.sqrt(sum(x*x for x in v2.values()))+1e-9)
+    return dot/(math.sqrt(sum(x*x for x in v1.values()))*math.sqrt(sum(x*x for x in v2.values()))+1e-9)
 
 # ── search ────────────────────────────────────────────────────────────────────
 def search_docs(query, filters, uid=None):
@@ -331,15 +331,13 @@ def search_docs(query, filters, uid=None):
     ql = query.lower()
 
     # ── Try semantic search via HF Space ─────────────────────────────────────
-    # Build list of candidates that have stored embeddings
     candidates_with_emb = []
     for d in docs:
         if d.get("embedding"):
             try:
                 emb = json.loads(d["embedding"])
                 candidates_with_emb.append({"id": d["id"], "embedding": emb})
-            except Exception:
-                pass
+            except Exception: pass
 
     hf_scores = {}
     if candidates_with_emb and _HF_URL:
@@ -392,9 +390,7 @@ def get_recs(doc_id, n=6):
             te = json.loads(target["embedding"])
             hf_cands = []
             for c in cands:
-                item = {"id": c["id"],
-                        "course_code": c.get("course_code",""),
-                        "academic_level": c.get("academic_level","")}
+                item = {"id": c["id"], "course_code": c.get("course_code",""), "academic_level": c.get("academic_level","")}
                 if c.get("embedding"):
                     try: item["embedding"] = json.loads(c["embedding"])
                     except: pass
@@ -444,7 +440,6 @@ def spa(path):
 @app.route("/api/health")
 def health():
     db = get_db()
-    # Check HF Space status
     hf_status = "not configured"
     if _HF_URL:
         try:
@@ -809,8 +804,14 @@ def activity():
     return jsonify({"activity":[dict(r) for r in rows]})
 
 
-if __name__ == "__main__":
+# ── FINAL INITIALIZATION HOOK ──────────────────────────────────────────────────
+# This runs when Gunicorn loads the file, ensuring tables are safely created.
+try:
     init_db()
+except Exception as e:
+    log.error(f"Failed to initialize database: {e}")
+
+if __name__ == "__main__":
     log.info(f"SLU Repo starting on port {PORT}")
     log.info(f"HF Space: {_HF_URL or 'NOT CONFIGURED — using TF-IDF fallback'}")
     app.run(host="0.0.0.0", port=PORT, debug=False)
