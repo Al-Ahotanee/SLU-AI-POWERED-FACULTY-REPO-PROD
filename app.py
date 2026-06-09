@@ -171,7 +171,7 @@ def make_token(uid, role):
     # Use exact integer timestamps to prevent PyJWT datetime parsing bugs
     now = int(time.time())
     t = jwt.encode({
-        "sub": uid,
+        "sub": str(uid),  # <--- FIXED: The JWT specification requires 'sub' to be a string
         "role": role,
         "exp": now + (JWT_DAYS * 86400),
         "iat": now
@@ -197,7 +197,7 @@ def require_auth(f):
                 
             # 2. Decode with 5 minutes leeway to prevent server clock skew errors
             d = jwt.decode(raw_token, SECRET, algorithms=["HS256"], leeway=300)
-            g.user_id = d["sub"]
+            g.user_id = int(d["sub"])  # <--- FIXED: Convert it back to an integer for the database
             g.user_role = d["role"]
             
             # 3. Security: Check if user STILL exists (handles database wipes)
